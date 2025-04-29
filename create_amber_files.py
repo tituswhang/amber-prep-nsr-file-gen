@@ -1,4 +1,3 @@
-# create_amber_files.py
 #!/usr/bin/env python
 import argparse
 import subprocess
@@ -18,16 +17,16 @@ def main():
     parser = argparse.ArgumentParser(
         description=(
             "Generate AMBER topology (.prmtop) and coordinate (.inpcrd) files "
-            "from a PDB/MOL2 or Gaussian/GAMESS output using antechamber (if needed), parmchk2, and tleap."
+            "from a PDB or MOL2 file using antechamber (if needed), parmchk2, and tleap."
         )
     )
-    parser.add_argument("input_file", help="Input: .pdb, .mol2, .gout/.esp (Gaussian), or .dat (GAMESS)")
+    parser.add_argument("input_file", help="Input: .pdb or .mol2 (MOL2 must be pre-charged by the user)")
     parser.add_argument("--prmtop", help="Output topology file (default: <base>.prmtop)")
     parser.add_argument("--inpcrd", help="Output coordinate file (default: <base>.inpcrd)")
     parser.add_argument(
         "--ac_opts",
-        default="",
-        help="Extra options for antechamber (e.g. '-c bcc -s 2')."
+        default="-c bcc -s 2",
+        help="Options for antechamber when converting PDB → MOL2 (default: '-c bcc -s 2')"
     )
     args = parser.parse_args()
 
@@ -35,63 +34,44 @@ def main():
     base, ext = os.path.splitext(os.path.basename(inf))
     ext = ext.lower()
 
-    # output names
+    # determine output names
     prmtop = args.prmtop if args.prmtop else f"{base}.prmtop"
     inpcrd = args.inpcrd if args.inpcrd else f"{base}.inpcrd"
     frcmod = f"{base}.frcmod"
     mol2   = f"{base}.mol2"
 
-    # helper to see if RESP was requested
-    want_resp = ("-c" in args.ac_opts and "resp" in args.ac_opts.split())
-
-    # STEP 1: generate MOL2 if needed
+    # STEP 1: handle PDB vs MOL2
     if ext == ".pdb":
-        if want_resp:
-            print("Error: RESP charges cannot be generated directly from a PDB file.")
-            print("You must supply a Gaussian ESP (.esp) or output (.gout) or GAMESS .dat file.")
-            sys.exit(1)
-        print("\n1. Converting PDB → MOL2 with AM1‑BCC (or other) via antechamber...")
-        cmd = ["antechamber", "-i", inf, "-fi", "pdb", "-o", mol2, "-fo", "mol2"]
-        if args.ac_opts:
-            cmd += args.ac_opts.split()
-        run_command(cmd)
-
-    elif ext == ".mol2":
-        if want_resp:
-            print("Error: RESP charges cannot be generated from a raw MOL2 file.")
-            print("You must supply a Gaussian ESP (.esp) or output (.gout) or GAMESS .dat file.")
-            sys.exit(1)
-        mol2 = inf
-        print(f"\nInput is MOL2 → skipping antechamber, using {mol2}")
-
-    elif ext in (".gout", ".esp", ".dat"):
-        # user supplied quantum chemistry output → RESP path
-        fmt_map = {".gout":"gout", ".esp":"gesp", ".dat":"gamess"}
-        fi_flag = fmt_map[ext]
-        print(f"\n1. Generating RESP‐charged MOL2 from {ext[1:]} via antechamber...")
+        print("\n1. Converting PDB into MOL2 via antechamber...")
         cmd = [
             "antechamber",
             "-i", inf,
-            "-fi", fi_flag,
+            "-fi", "pdb",
             "-o", mol2,
             "-fo", "mol2"
-        ]
-        # ensure RESP is in the opts
-        if not want_resp:
-            print("Warning: no `-c resp` in options; request will default to whatever charge method you gave.")
-        cmd += args.ac_opts.split()
+        ] + args.ac_opts.split()
         run_command(cmd)
 
+    elif ext == ".mol2":
+        mol2 = inf
+        print(f"\nInput is MOL2. skipping antechamber, using {mol2}")
+
     else:
-        print("Error: Unsupported extension. Provide a .pdb, .mol2, .gout/.esp, or .dat file.")
+        print("Error: Unsupported input extension.")
+        print("       Please supply a .pdb (will be auto-converted) or a pre-charged .mol2 file.")
         sys.exit(1)
 
-    # STEP 2: parmchk2 → frcmod
+    # STEP 2: parmchk2 to generate frcmod
     print("\n2. Generating frcmod with parmchk2...")
-    run_command(["parmchk2", "-i", mol2, "-f", "mol2", "-o", frcmod])
+    run_command([
+        "parmchk2",
+        "-i", mol2,
+        "-f", "mol2",
+        "-o", frcmod
+    ])
 
-    # STEP 3: tleap → prmtop + inpcrd
-    tleap_in = f"""
+    # STEP 3: tleap to produce prmtop & inpcrd
+    tleap_input = f"""\
 source leaprc.gaff
 mol = loadmol2 {mol2}
 loadamberparams {frcmod}
@@ -99,16 +79,16 @@ saveamberparm mol {prmtop} {inpcrd}
 quit
 """
     with tempfile.NamedTemporaryFile("w", delete=False, suffix=".in") as tf:
-        tf.write(tleap_in)
-        tfin = tf.name
+        tf.write(tleap_input)
+        tleap_file = tf.name
 
     print("\n3. Running tleap → prmtop & inpcrd")
-    run_command(["tleap", "-f", tfin])
-    os.remove(tfin)
+    run_command(["tleap", "-f", tleap_file])
+    os.remove(tleap_file)
 
-    print("\nDone")
-    print(f"  Topology:  {prmtop}")
-    print(f"  Coordinates:{inpcrd}")
+    print("\nDone!")
+    print(f"  Topology file:  {prmtop}")
+    print(f"  Coordinate file: {inpcrd}")
 
 if __name__ == "__main__":
     main()
