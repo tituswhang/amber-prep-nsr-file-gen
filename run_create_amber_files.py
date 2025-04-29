@@ -57,11 +57,6 @@ def main():
             ac_opts = " ".join(chosen) if chosen else "-c bcc"
         ac_opts += " -s 2"
 
-        # RESP only valid for quantum outputs
-        if "resp" in ac_opts and ext in [".mol2", ".pdb"]:
-            print("\nError: RESP requires Gaussian (.gout/.esp) or GAMESS (.dat) input.")
-            sys.exit(1)
-
     # 5) assemble command
     cmd = [sys.executable, script, infile]
     if prmtop:
