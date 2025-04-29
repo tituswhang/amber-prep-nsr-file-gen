@@ -1,103 +1,84 @@
+#!/usr/bin/env python
 import os
 import subprocess
+import sys
 
 def main():
-    # 1
-    create_script_input = input("Enter the full or relative path to create_amber_files.py (press Enter if it's in the current directory): ").strip()
-    if not create_script_input:
-        create_script = os.path.join(os.getcwd(), "create_amber_files.py")
+    # 1) locate create_amber_files.py
+    cs = input("Enter the full or relative path to create_amber_files.py (press Enter if it's in the current directory): ").strip()
+    script = os.path.abspath(cs) if cs else os.path.join(os.getcwd(), "create_amber_files.py")
+    if not os.path.isfile(script):
+        print("Error: cannot find create_amber_files.py at", script)
+        sys.exit(1)
+
+    # 2) locate input file
+    inp = input("Enter the full or relative path to the input (.pdb or .mol2): ").strip()
+    infile = os.path.abspath(inp)
+    if not os.path.isfile(infile):
+        print("Error: cannot find input file at", infile)
+        sys.exit(1)
+    _, ext = os.path.splitext(infile.lower())
+
+    # 3) optional prmtop/inpcrd names
+    prmtop = input("Enter desired name for output topology (.prmtop) file (press Enter to use default): ").strip()
+    inpcrd = input("Enter desired name for output coordinate (.inpcrd) file (press Enter to use default): ").strip()
+
+    # Automatically append extensions if missing
+    if prmtop and not prmtop.lower().endswith('.prmtop'):
+        prmtop += '.prmtop'
+    if inpcrd and not inpcrd.lower().endswith('.inpcrd'):
+        inpcrd += '.inpcrd'
+
+    # 4) charge options: default for PDB, interactive for others
+    if ext == ".pdb":
+        print("\nInput is PDB: defaulting to AM1-BCC charges (-c bcc -s 2).")
+        ac_opts = "-c bcc -s 2"
     else:
-        create_script = os.path.abspath(create_script_input)
-    if not os.path.isfile(create_script):
-        print("Error: The specified create_amber_files.py file does not exist at", create_script)
-        return
+        opts = {
+            "1": "-c resp",  "2": "-c bcc",   "3": "-c cm1", "4": "-c cm2",
+            "5": "-c esp",   "6": "-c mul",   "7": "-c gas",  "8": "-c abcg2",
+            "9": "-c rc",   "10": "-c wc",  "11": "-c dc"
+        }
+        desc = {
+            "1": "RESP charges (requires .gout/.esp/.dat)",
+            "2": "AM1-BCC (default)", "3": "CM1",      "4": "CM2",
+            "5": "ESP (Kollman)",     "6": "Mulliken","7": "Gasteiger",
+            "8": "ABCG2",             "9": "Read charge",
+            "10": "Write charge",     "11": "Delete charge"
+        }
+        print("\nCharge options:")
+        for k in sorted(opts, key=int):
+            print(f"{k}. {desc[k]}: {opts[k]}")
+        sel = input("Enter the numbers for the charge options you want (press Enter to use default -c bcc): ").strip().split()
+        if not sel:
+            ac_opts = "-c bcc"
+        else:
+            chosen = [opts.get(x) for x in sel if x in opts]
+            ac_opts = " ".join(chosen) if chosen else "-c bcc"
+        ac_opts += " -s 2"
 
-    # 2
-    pdb_file_input = input("Enter the full or relative path to the input PDB file: ").strip()
-    pdb_file = os.path.abspath(pdb_file_input)
-    if not os.path.isfile(pdb_file):
-        print("Error: The specified PDB file does not exist at", pdb_file)
-        return
+        # RESP only valid for quantum outputs
+        if "resp" in ac_opts and ext in [".mol2", ".pdb"]:
+            print("\nError: RESP requires Gaussian (.gout/.esp) or GAMESS (.dat) input.")
+            sys.exit(1)
 
-    # 3
-    prmtop_file = input("Enter the desired name for the output topology (prmtop) file (press Enter to use default): ").strip()
-    inpcrd_file = input("Enter the desired name for the output coordinate (inpcrd) file (press Enter to use default): ").strip()
+    # 5) assemble command
+    cmd = [sys.executable, script, infile]
+    if prmtop:
+        cmd += ["--prmtop", prmtop]
+    if inpcrd:
+        cmd += ["--inpcrd", inpcrd]
+    cmd += ["--ac_opts", ac_opts]
 
-    # 4
-    print("\nAvailable Charge Method Options:")
-    charge_options = {
-        "1": "-c resp",
-        "2": "-c bcc",
-        "3": "-c cm1",
-        "4": "-c cm2",
-        "5": "-c esp",
-        "6": "-c mul",
-        "7": "-c gas",
-        "8": "-c abcg2",
-        "9": "-c rc",
-        "10": "-c wc",
-        "11": "-c dc"
-    }
-    descriptions = {
-        "1": "Use RESP charges",
-        "2": "Use AM1-BCC charges (default)",
-        "3": "Use CM1 charges",
-        "4": "Use CM2 charges",
-        "5": "Use ESP (Kollman) charges",
-        "6": "Use Mulliken charges",
-        "7": "Use Gasteiger charges",
-        "8": "Use ABCG2 charges",
-        "9": "Read in charge",
-        "10": "Write out charge",
-        "11": "Delete Charge"
-    }
-
-    for num in sorted(charge_options, key=lambda x: int(x)):
-        print(f"{num}. {descriptions[num]}: {charge_options[num]}")
-    user_charge_selection = input("Enter the numbers corresponding to the charge options you want or press Enter to use default (-c bcc): ").strip()
-
-    if user_charge_selection:
-        selected_numbers = user_charge_selection.split()
-        selected_options = [charge_options[num] for num in selected_numbers if num in charge_options]
-        ac_opts = " ".join(selected_options)
+    # 6) run
+    print("\nRunning:", " ".join(cmd))
+    rc = subprocess.call(cmd)
+    if rc != 0:
+        print("create_amber_files.py failed with exit code", rc)
+        sys.exit(rc)
     else:
-        ac_opts = "-c bcc"
-    # Automatically append default verbosity option.
-    ac_opts += " -s 2"
+        print("Success")
 
-    # Build argument list for create_amber_files.py.
-    base_command = [create_script, pdb_file]
-    if prmtop_file:
-        base_command.extend(["--prmtop", prmtop_file])
-    if inpcrd_file:
-        base_command.extend(["--inpcrd", inpcrd_file])
-    if ac_opts:
-        base_command.extend(["--ac_opts", ac_opts])
-    
-    # List of python interpreter candidates to try.
-    python_candidates = ["python", "python3", "python3.8"]
-
-    success = False
-    for candidate in python_candidates:
-        command = [candidate] + base_command
-        print("\nTrying command:")
-        print(" ".join(command))
-        try:
-            result = subprocess.run(command)
-            if result.returncode == 0:
-                print("\nScript executed successfully using ", candidate)
-                success = True
-                break
-            else:
-                print(f"\n{candidate} ran the script but it exited with non-zero exit code ({result.returncode}). Trying next candidate...")
-        except FileNotFoundError:
-            print(f"\n{candidate} not found, trying next candidate...")
-        except Exception as e:
-            print(f"\nAn error occurred when trying {candidate}: {e}")
-    
-    if not success:
-        print("\nNone of the Python interpreter candidates succeeded in running create_amber_files.py.")
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
 

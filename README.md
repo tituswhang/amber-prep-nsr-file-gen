@@ -28,6 +28,10 @@ This script uses **AMBER Tools** to:
 3. **Create** an AMBER parameter (topology) and coordinate file (using `tleap`).
 
 ### Usage
+
+**Note:** If you plan to provide a `.mol2` file as input, ensure it has been generated (e.g., via Gaussian or GAMESS) with the desired charges before running this script; it will skip the antechamber step and use your `.mol2` directly.
+
+### Usage
 1. Make the script executable (optional but recommended on Linux/macOS):
 ```
 chmod +x create_amber_files.py
@@ -41,7 +45,6 @@ python create_amber_files.py <input.pdb> [--prmtop <output.prmtop>] [--inpcrd <o
     - Default: If not provided, the script derives the base name from <input.pdb> and appends .prmtop.
 - inpcrd <output.inpcrd>: (Optional) Specify the name of the generated coordinate file.
     - Default: If not provided, the script derives the base name from <input.pdb> and appends .inpcrd.
-    - 
 ### Example
 
 ```
@@ -49,10 +52,10 @@ python create_amber_files.py my_file.pdb
 ```
 This will produce:
 
-- my_file.mol2
-- my_file.frcmod
-- my_file.prmtop
-- my_file.inpcrd
+- `my_file.mol2`
+- `my_file.frcmod`
+- `my_file.prmtop`
+- `my_file.inpcrd`
 
 You can also customize the output names:
 
@@ -134,3 +137,4 @@ The script will then build and run a command like:
 ```
 python /path/to/create_amber_files.py /path/to/my_file.pdb --prmtop my_file_top.prmtop --inpcrd my_file_coords.inpcrd --ac_opts "-c bcc -s 2"
 ```
+

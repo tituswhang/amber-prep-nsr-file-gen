@@ -1,4 +1,5 @@
-#!/usr/bin/env python3
+# create_amber_files.py
+#!/usr/bin/env python
 import argparse
 import subprocess
 import sys
@@ -6,7 +7,6 @@ import os
 import tempfile
 
 def run_command(command, shell=False):
-    """Run a command and exit if it fails."""
     print("Running command:", " ".join(command) if not shell else command)
     try:
         subprocess.check_call(command, shell=shell)
@@ -16,77 +16,99 @@ def run_command(command, shell=False):
 
 def main():
     parser = argparse.ArgumentParser(
-        description=("Generate AMBER parameter (prmtop) and coordinate (inpcrd) files "
-                     "from a PDB file using antechamber, parmchk2, and tleap.")
+        description=(
+            "Generate AMBER topology (.prmtop) and coordinate (.inpcrd) files "
+            "from a PDB/MOL2 or Gaussian/GAMESS output using antechamber (if needed), parmchk2, and tleap."
+        )
     )
-    parser.add_argument("pdb_file", help="Input PDB file")
-    parser.add_argument("--prmtop", help="Output AMBER topology file (default: <input>.prmtop)")
-    parser.add_argument("--inpcrd", help="Output AMBER coordinate file (default: <input>.inpcrd)")
-    parser.add_argument("--ac_opts", 
-                        help=("Additional options to pass to antechamber (e.g., '-c bcc -s 2 -X <option>'). "
-                              "These options will be appended to the default options."), 
-                        default="")
+    parser.add_argument("input_file", help="Input: .pdb, .mol2, .gout/.esp (Gaussian), or .dat (GAMESS)")
+    parser.add_argument("--prmtop", help="Output topology file (default: <base>.prmtop)")
+    parser.add_argument("--inpcrd", help="Output coordinate file (default: <base>.inpcrd)")
+    parser.add_argument(
+        "--ac_opts",
+        default="",
+        help="Extra options for antechamber (e.g. '-c bcc -s 2')."
+    )
     args = parser.parse_args()
 
-    pdb_file = args.pdb_file
-    # Get the base name without extension (e.g., mystructure from mystructure.pdb)
-    base_name = os.path.splitext(os.path.basename(pdb_file))[0]
+    inf = args.input_file
+    base, ext = os.path.splitext(os.path.basename(inf))
+    ext = ext.lower()
 
-    # Set default filenames based on the input file name if not provided
-    prmtop_file = args.prmtop if args.prmtop else base_name + ".prmtop"
-    inpcrd_file = args.inpcrd if args.inpcrd else base_name + ".inpcrd"
-    mol2_file = base_name + ".mol2"
-    frcmod_file = base_name + ".frcmod"
+    # output names
+    prmtop = args.prmtop if args.prmtop else f"{base}.prmtop"
+    inpcrd = args.inpcrd if args.inpcrd else f"{base}.inpcrd"
+    frcmod = f"{base}.frcmod"
+    mol2   = f"{base}.mol2"
 
-    # Step 1: Use antechamber to generate a MOL2 file from the PDB.
-    print("\n1. Converting PDB to MOL2 using antechamber...")
-    antechamber_cmd = [
-        "antechamber",
-        "-i", pdb_file,
-        "-fi", "pdb",
-        "-o", mol2_file,
-        "-fo", "mol2",
-    ]
-    # Add default options: charge method (-c bcc) and verbosity (-s 2)
-    antechamber_cmd.extend(["-c", "bcc", "-s", "2"])
-    # Append additional options provided by the user
-    if args.ac_opts:
-        extra_options = args.ac_opts.split()
-        antechamber_cmd.extend(extra_options)
-    run_command(antechamber_cmd)
+    # helper to see if RESP was requested
+    want_resp = ("-c" in args.ac_opts and "resp" in args.ac_opts.split())
 
-    # Step 2: Run parmchk2 to generate missing force-field parameters.
-    print("\n2. Generating frcmod file with parmchk2...")
-    parmchk2_cmd = [
-        "parmchk2",
-        "-i", mol2_file,
-        "-f", "mol2",
-        "-o", frcmod_file
-    ]
-    run_command(parmchk2_cmd)
+    # STEP 1: generate MOL2 if needed
+    if ext == ".pdb":
+        if want_resp:
+            print("Error: RESP charges cannot be generated directly from a PDB file.")
+            print("You must supply a Gaussian ESP (.esp) or output (.gout) or GAMESS .dat file.")
+            sys.exit(1)
+        print("\n1. Converting PDB → MOL2 with AM1‑BCC (or other) via antechamber...")
+        cmd = ["antechamber", "-i", inf, "-fi", "pdb", "-o", mol2, "-fo", "mol2"]
+        if args.ac_opts:
+            cmd += args.ac_opts.split()
+        run_command(cmd)
 
-    # Step 3: Prepare a tleap input file.
-    tleap_instructions = f"""\
+    elif ext == ".mol2":
+        if want_resp:
+            print("Error: RESP charges cannot be generated from a raw MOL2 file.")
+            print("You must supply a Gaussian ESP (.esp) or output (.gout) or GAMESS .dat file.")
+            sys.exit(1)
+        mol2 = inf
+        print(f"\nInput is MOL2 → skipping antechamber, using {mol2}")
+
+    elif ext in (".gout", ".esp", ".dat"):
+        # user supplied quantum chemistry output → RESP path
+        fmt_map = {".gout":"gout", ".esp":"gesp", ".dat":"gamess"}
+        fi_flag = fmt_map[ext]
+        print(f"\n1. Generating RESP‐charged MOL2 from {ext[1:]} via antechamber...")
+        cmd = [
+            "antechamber",
+            "-i", inf,
+            "-fi", fi_flag,
+            "-o", mol2,
+            "-fo", "mol2"
+        ]
+        # ensure RESP is in the opts
+        if not want_resp:
+            print("Warning: no `-c resp` in options; request will default to whatever charge method you gave.")
+        cmd += args.ac_opts.split()
+        run_command(cmd)
+
+    else:
+        print("Error: Unsupported extension. Provide a .pdb, .mol2, .gout/.esp, or .dat file.")
+        sys.exit(1)
+
+    # STEP 2: parmchk2 → frcmod
+    print("\n2. Generating frcmod with parmchk2...")
+    run_command(["parmchk2", "-i", mol2, "-f", "mol2", "-o", frcmod])
+
+    # STEP 3: tleap → prmtop + inpcrd
+    tleap_in = f"""
 source leaprc.gaff
-mol = loadmol2 {mol2_file}
-loadamberparams {frcmod_file}
-saveamberparm mol {prmtop_file} {inpcrd_file}
+mol = loadmol2 {mol2}
+loadamberparams {frcmod}
+saveamberparm mol {prmtop} {inpcrd}
 quit
 """
-    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".in") as tleap_in:
-        tleap_in.write(tleap_instructions)
-        tleap_in_name = tleap_in.name
+    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".in") as tf:
+        tf.write(tleap_in)
+        tfin = tf.name
 
-    print("\n3. Running tleap to generate prmtop and inpcrd files...")
-    tleap_cmd = ["tleap", "-f", tleap_in_name]
-    run_command(tleap_cmd)
+    print("\n3. Running tleap → prmtop & inpcrd")
+    run_command(["tleap", "-f", tfin])
+    os.remove(tfin)
 
-    # Clean up the temporary tleap input file.
-    os.remove(tleap_in_name)
-    print("\nFiles generated successfully!")
-    print(f"  Topology file (prmtop): {prmtop_file}")
-    print(f"  Coordinate file (inpcrd): {inpcrd_file}")
+    print("\nDone")
+    print(f"  Topology:  {prmtop}")
+    print(f"  Coordinates:{inpcrd}")
 
 if __name__ == "__main__":
     main()
-
